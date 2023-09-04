@@ -1,11 +1,12 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"machine"
+	"time"
 
+	"libdb.so/catglow/ledserial"
 	"tinygo.org/x/drivers/ws2812"
 )
 
@@ -27,6 +28,7 @@ type Device struct {
 
 // NewDevice creates a new device.
 func NewDevice(uart *machine.UART, ledPin machine.Pin) *Device {
+	ledPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	return &Device{
 		uart: uart,
 		led:  ws2812.New(ledPin),
@@ -35,11 +37,21 @@ func NewDevice(uart *machine.UART, ledPin machine.Pin) *Device {
 
 // Run runs the device loop forever.
 func (d *Device) Run() {
+	go func() {
+		for t := range time.Tick(5 * time.Second) {
+			d.log(fmt.Sprintf("the time is now %s", t))
+		}
+	}()
+
 	for {
+		time.Sleep(1 * time.Second)
+
 		p, err := d.readPacket()
 		if err != nil {
-			d.panic(err)
+			d.logError(err)
+			continue
 		}
+
 		if err := d.handlePacket(p); err != nil {
 			d.logError(err)
 		}
@@ -48,75 +60,43 @@ func (d *Device) Run() {
 
 func (d *Device) panic(err error) {
 	d.logError(err)
-	d.sendPacket(PanicPacket{})
+	d.sendPacket(ledserial.PanicPacket{})
 	panic("device panic")
 }
 
+func (d *Device) log(msg string) {
+	d.sendPacket(ledserial.LogPacket{Message: msg})
+}
+
 func (d *Device) logError(err error) {
-	d.sendPacket(ErrorPacket{Message: err.Error()})
+	d.sendPacket(ledserial.ErrorPacket{Message: err.Error()})
 }
 
-func (d *Device) sendPacket(p OutgoingPacket) {
+func (d *Device) sendPacket(p ledserial.OutgoingPacket) {
+	ledserial.WriteOutgoingPacket(d.uart, p)
+}
+
+func (d *Device) readPacket() (ledserial.IncomingPacket, error) {
+	return ledserial.ReadIncomingPacket(d.uart, ledserial.ReadContext{
+		NumLEDs: d.numLEDs,
+	})
+}
+
+func (d *Device) handlePacket(p ledserial.IncomingPacket) error {
 	switch p := p.(type) {
-	case ErrorPacket:
-		d.uart.WriteByte(byte(TypeErrorPacket))
-		binary.Write(d.uart, binary.LittleEndian, uint16(len(p.Message)))
-		io.WriteString(d.uart, p.Message)
-
-	case PanicPacket:
-		d.uart.WriteByte(byte(TypePanicPacket))
-	}
-}
-
-func (d *Device) readPacket() (IncomingPacket, error) {
-	ptype, err := d.uart.ReadByte()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read incoming packet type: %w", err)
-	}
-
-	switch IncomingPacketType(ptype) {
-	case TypeInitializePacket:
-		var p InitializePacket
-		if err := binary.Read(d.uart, binary.LittleEndian, &p); err != nil {
-			return nil, fmt.Errorf("failed to read number of LEDs: %w", err)
-		}
-		return p, nil
-
-	case TypeClearPacket:
-		var p ClearPacket
-		return p, nil
-
-	case TypeSetPacket:
-		var p SetPacket
-		p.Pix = make([]uint8, 3*d.numLEDs)
-		if _, err := io.ReadFull(d.uart, p.Pix); err != nil {
-			return nil, fmt.Errorf("failed to read pixel data: %w", err)
-		}
-		return p, nil
-
-	default:
-		return nil, fmt.Errorf("unknown packet type: %d", ptype)
-	}
-}
-
-func (d *Device) handlePacket(p IncomingPacket) error {
-	switch p := p.(type) {
-	case InitializePacket:
+	case ledserial.InitializePacket:
 		if p.NumLEDs < 1 {
 			return fmt.Errorf("invalid number of LEDs: %d", p.NumLEDs)
 		}
 		d.numLEDs = p.NumLEDs
+		d.clearLEDs()
 		return nil
 
-	case ClearPacket:
-		for i := 0; i < int(d.numLEDs); i++ {
-			d.uart.WriteByte(0)
-			d.uart.WriteByte(0)
-			d.uart.WriteByte(0)
-		}
+	case ledserial.ClearPacket:
+		d.clearLEDs()
 		return nil
 
-	case SetPacket:
+	case ledserial.SetPacket:
 		if len(p.Pix) != 3*int(d.numLEDs) {
 			return fmt.Errorf("invalid number of pixels: %d", len(p.Pix)/3)
 		}
@@ -127,5 +107,13 @@ func (d *Device) handlePacket(p IncomingPacket) error {
 
 	default:
 		return fmt.Errorf("unknown packet type: %T", p)
+	}
+}
+
+func (d *Device) clearLEDs() {
+	for i := 0; i < int(d.numLEDs); i++ {
+		d.uart.WriteByte(0)
+		d.uart.WriteByte(0)
+		d.uart.WriteByte(0)
 	}
 }

@@ -1,4 +1,4 @@
-{ lib, stdenv, fetchzip, go, runCommandLocal, makeWrapper }:
+{ lib, stdenv, fetchzip, go_1_20, runCommandLocal, makeWrapper }:
 
 let
 	version = "0.28.1";
@@ -13,12 +13,13 @@ in
 
 runCommandLocal "tinygo-${version}" {
 	inherit version;
-	src = fetchTarball (createURL go);
+	src = fetchTarball (createURL go_1_20);
 	nativeBuildInputs = [ makeWrapper ];
 } ''
 	cp --no-preserve=mode,ownership -r $src $out
 	chmod +x $out/bin/*
 	wrapProgram $out/bin/tinygo \
-		--set GOROOT ${go}/share/go \
+		--prefix PATH : "${lib.makeBinPath [ go_1_20 ]}" \
+		--set GOROOT ${go_1_20}/share/go \
 		--set TINYGOROOT $out
 ''

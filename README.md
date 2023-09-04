@@ -52,14 +52,13 @@ go build
 [[led]]
   range = [40, 192]
 
-  visualizer = "glowing" # see #Visualizers
-  backend = "pipewire"
-  device = "spotify"
-  smooth = 0.5
-  flip = true # flip the LED strip
-
   [led.visualizer]
+   kind = "glowing" # see #Visualizers
+   flip = true # flip the LED strip
    bins = -1 # use as many bins as there are LEDs, otherwise bins are sectioned
+   backend = "pipewire"
+   device = "spotify"
+   smooth = 0.5
 
    gradients = [
      [255, 0, 0],

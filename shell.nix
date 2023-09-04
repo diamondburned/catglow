@@ -1,7 +1,13 @@
 {}:
 
 let
-	pkgs = import ./nix/pkgs.nix {};
+	pkgs = import ./nix/pkgs.nix {
+		overlays = [
+			(self: super: {
+				go = super.go_1_21;
+			})
+		];
+	};
 in
 
 with pkgs.lib;

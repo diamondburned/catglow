@@ -30,10 +30,15 @@ following packet types are defined:
 	0x01: Clear all LEDs.
 	0x02: Set all LEDs to the given colors.
 
+All packets must be suffixed with a CRC32 checksum with the IEEE polynomial.
+The checksum is calculated over the entire packet, including the packet type.
+The checksum is sent as a uint32.
+
 The packet structure can be understood as follows:
 
 	0x00: Packet type (uint8)
-	0x..: Packet data of known length depending on the packet type
+	0x01: Packet data of known length depending on the packet type
+    0xNN: CRC32 checksum (uint32)
 
 The packet data depends on the packet type.
 
@@ -85,6 +90,8 @@ following packet types are defined:
 
 	0x00: Error packet. This is sent when an error occurs.
 	0x01: Panic packet. This is sent when the program cannot recover.
+    0x03: Log packet. This is sent when the program wants to log a message.
+    0x04: Acknowledgement packet. This is sent when a packet is received.
 
 The packet structure can be similarly understood as the incoming packet.
 
@@ -103,3 +110,10 @@ the program cannot recover. The packet requires the following data:
 
 	0x00: 0x01 value (uint8)
 
+## Log Packet
+
+The log packet is sent as a single byte with value 0x03. It indicates that
+the program wants to log a message. The packet requires the following data:
+
+    0x00: 0x03 value (uint8)
+    0x01: Log message (string)
