@@ -17,19 +17,37 @@ let
 	tinygo = pkgs.callPackage ./nix/tinygo.nix {};
 
 	# Tinygo target for gopls to use.
-	tinygoTarget = "esp32-coreboard-v2";
-	tinygoPaths = [ "esp32" ];
+	tinygoPaths = [ "xiao" "esp32" ];
+	tinygoTargets = {
+		"xiao"  = "xiao";
+		"esp32" = "esp32-coreboard-v2";
+	};
 
 	tinygoHook =
 		with pkgs.lib;
 		with builtins;
 		''
+			declare -A tinygoTargets
+			${builtins.concatStringsSep " "
+				(mapAttrsToList
+					(name: target: "tinygoTargets[${escapeShellArg name}]=${escapeShellArg target}")
+					(tinygoTargets)
+				)
+			}
+			tinygoPaths=(
+				${builtins.concatStringsSep " "
+					(map (escapeShellArg) tinygoPaths)
+				}
+			)
+
 			isTinygo() {
 				root=${escapeShellArg (toString ./.)}
 				path="''${PWD#"$root/"*}"
 
-				for p in $TINYGO_PATHS; do
+				for p in $tinygoPaths; do
 					if [[ $path == $p* ]]; then
+						export tinygoPath=$p
+						export tinygoTarget=''${tinygoTargets["$p"]}
 						return 0
 					fi
 				done
@@ -38,7 +56,7 @@ let
 			}
 
 			hookTinygoEnv() {
-				vars=$(tinygo info -json -target $TINYGO_TARGET)
+				vars=$(tinygo info -json -target $tinygoTarget)
 
 				export GOROOT=$(jq -r '.goroot' <<< "$vars")
 				export GOARCH=$(jq -r '.goarch' <<< "$vars")
@@ -52,7 +70,7 @@ let
 		pkgs.writeShellScriptBin name ''
 			${tinygoHook}
 			if isTinygo; then
-				echo "Detected Tinygo, loading for target $TINYGO_TARGET" >&2
+				echo "Detected Tinygo, loading for target $tinygoTarget" >&2
 				hookTinygoEnv
 			fi
 			exec ${bin} "$@"
@@ -84,7 +102,4 @@ pkgs.mkShell {
 	];
 
 	# CGO_ENABLED = "1";
-
-	TINYGO_TARGET = tinygoTarget;
-	TINYGO_PATHS = builtins.concatStringsSep " " tinygoPaths;
 }
