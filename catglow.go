@@ -9,6 +9,7 @@ import (
 	"github.com/pkg/errors"
 	"go.bug.st/serial"
 	"golang.org/x/sync/errgroup"
+	"libdb.so/catglow/internal/led"
 	"libdb.so/catglow/ledserial"
 )
 
@@ -29,7 +30,7 @@ type Animator interface {
 	// the callback function. The callback function must not be called after
 	// AcquireFrame returns.
 	// Usually, the daemon will call this method when QueueRefresh is called.
-	AcquireFrame(f func(LEDs))
+	AcquireFrame(f func(led.LEDs))
 }
 
 // Daemon is the main catglow daemon.
@@ -54,7 +55,7 @@ func NewDaemon(cfg *Config, logger *slog.Logger) (*Daemon, error) {
 	}, nil
 }
 
-// QueueRefresh queues a refresh of the LEDs.
+// QueueRefresh queues a refresh of the led.LEDs.
 // This method is mainly used internally.
 func (d *Daemon) QueueRefresh() {
 	select {
@@ -127,7 +128,7 @@ func (d *internalDaemon) Run(ctx context.Context) error {
 }
 
 func (d *internalDaemon) mainLoop(ctx context.Context) error {
-	leds := NewLEDs(d.cfg.NumLEDs())
+	leds := led.NewLEDs(d.cfg.NumLEDs())
 	var animators []trackedAnimator
 
 	for _, led := range d.cfg.LEDs {
@@ -164,7 +165,7 @@ eventLoop:
 			// refresh = d.refresh
 
 			for _, animator := range animators {
-				animator.AcquireFrame(func(f LEDs) {
+				animator.AcquireFrame(func(f led.LEDs) {
 					f.Draw(animator.cfg.Range[0], leds)
 				})
 			}
@@ -185,7 +186,7 @@ func (d *internalDaemon) readPackets(ctx context.Context, dst chan<- ledserial.O
 
 	for ctx.Err() == nil {
 		p, err := ledserial.ReadOutgoingPacket(d.port, ledserial.ReadContext{
-			NumLEDs: uint16(d.cfg.NumLEDs()),
+			Numled.LEDs: uint16(d.cfg.NumLEDs()),
 		})
 		if err != nil {
 			// A short read indicates a timeout. This is expected.

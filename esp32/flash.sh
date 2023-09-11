@@ -10,8 +10,7 @@ main() {
 	package=$(realpath --relative-to esp32 "$package")
 
 	cd esp32
-	tinygo flash \
-		-target=$TINYGO_TARGET -port=/dev/ttyUSB0 "${@:2}" "./$package"
+	tinygo flash -target=esp32-coreboard-v2 -port=/dev/ttyUSB0 "${@:2}" "./$package"
 }
 
 main "$@"

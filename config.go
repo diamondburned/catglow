@@ -8,6 +8,7 @@ import (
 
 	"github.com/pelletier/go-toml"
 	"github.com/pkg/errors"
+	"libdb.so/catglow/internal/led"
 )
 
 // Config is the configuration for the Catglow server.
@@ -60,9 +61,6 @@ func (c *Config) NumLEDs() int {
 	return numLEDs
 }
 
-// RGBColor is a color in RGB format.
-type RGBColor [3]uint8
-
 // LEDConfig is the configuration for a range of LEDs.
 type LEDConfig struct {
 	// Range is the range of LEDs to configure.
@@ -72,7 +70,7 @@ type LEDConfig struct {
 	// If none are set, then the LEDs are unchanged.
 
 	// Color is the color to set the LEDs to.
-	Color *RGBColor `toml:"color,omitempty"`
+	Color *led.RGBColor `toml:"color,omitempty"`
 	// Snake is the configuration for the snake animation.
 	Snake *SnakeAnimationConfig `toml:"snake,omitempty"`
 	// Visualizer is the configuration for the visualizer.
@@ -90,7 +88,7 @@ type SnakeAnimationConfig struct {
 // SnakeAnimationChunk is a chunk for the snake animation.
 type SnakeAnimationChunk struct {
 	// Color is the color for the chunk.
-	Color RGBColor `toml:"color"`
+	Color led.RGBColor `toml:"color"`
 }
 
 // VisualizerConfig is the configuration for the visualizer.
@@ -102,11 +100,11 @@ type VisualizerConfig struct {
 	Device  string         `toml:"device"`
 	Smooth  float64        `toml:"smooth"`
 
-	Gradients          []RGBColor   `toml:"gradients"`
-	GradientMode       GradientMode `toml:"gradient_mode"`
-	GradientPeakSwitch float64      `toml:"gradient_peak_switch"`
-	GradientPeakBin    int          `toml:"gradient_peak_bin"`
-	GradientDuration   TOMLDuration `toml:"gradient_duration"`
+	Gradients          []led.RGBColor `toml:"gradients"`
+	GradientMode       GradientMode   `toml:"gradient_mode"`
+	GradientPeakSwitch float64        `toml:"gradient_peak_switch"`
+	GradientPeakBin    int            `toml:"gradient_peak_bin"`
+	GradientDuration   TOMLDuration   `toml:"gradient_duration"`
 }
 
 // VisualizerKind is the kind of visualizer to use.

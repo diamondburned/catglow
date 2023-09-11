@@ -1,9 +1,12 @@
-package catglow
+package led
 
 import (
 	"io"
 	"unsafe"
 )
+
+// RGBColor is a color in RGB format.
+type RGBColor [3]uint8
 
 // LEDs describes a strip of LEDs. It is a preallocated slice of RGBColor.
 type LEDs []RGBColor

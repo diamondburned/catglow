@@ -15,11 +15,12 @@ with builtins;
 
 let
 	tinygo = pkgs.callPackage ./nix/tinygo.nix {};
+	# tinygo = pkgs.tinygo;
 
 	# Tinygo target for gopls to use.
 	tinygoPaths = [ "xiao" "esp32" ];
 	tinygoTargets = {
-		"xiao"  = "xiao";
+		"xiao"  = "xiao-rp2040";
 		"esp32" = "esp32-coreboard-v2";
 	};
 
@@ -97,9 +98,8 @@ pkgs.mkShell {
 		gopls
 		gotools
 		go-tools # staticcheck
-		tinygo
 		esptool
-	];
+	] ++ [ tinygo ];
 
 	# CGO_ENABLED = "1";
 }
