@@ -18,5 +18,4 @@ runCommandLocal "tinygo-${version}" {
 } ''
 	cp --no-preserve=mode,ownership -r $src $out
 	chmod +x $out/bin/*
-	wrapProgram $out/bin/tinygo --set TINYGOROOT $out
 ''

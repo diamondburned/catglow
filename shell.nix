@@ -77,7 +77,7 @@ let
 			exec ${bin} "$@"
 		'';
 
-	go = withTinygoHook "go" "${pkgs.go}/bin/go";
+	# go = withTinygoHook "go" "${pkgs.go}/bin/go";
 	gopls = withTinygoHook "gopls" "${pkgs.gopls}/bin/gopls";
 	goimports = withTinygoHook "goimports" "${pkgs.gotools}/bin/goimports";
 
