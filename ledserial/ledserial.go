@@ -2,10 +2,12 @@
 package ledserial
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"io"
+	"strings"
 )
 
 // Endianness defines the endianness of the protocol.
@@ -62,9 +64,13 @@ type OutgoingPacketType uint8
 
 const (
 	TypeErrorPacket OutgoingPacketType = iota
-	TypePanicPacket
 	TypeLogPacket
+	TypeAckPacket
 )
+
+// TypePanicPacket is a special constant. It is the first letter of the word
+// "panic" in order to parse the string itself as a packet type.
+const TypePanicPacket OutgoingPacketType = 'p'
 
 // String returns a string representation of the packet type.
 func (t OutgoingPacketType) String() string {
@@ -92,16 +98,24 @@ type ErrorPacket struct {
 }
 
 // PanicPacket is a packet that indicates the program cannot recover.
-type PanicPacket struct{}
+type PanicPacket struct {
+	Message string
+}
 
 // LogPacket is a packet that contains a log message.
 type LogPacket struct {
 	Message string
 }
 
+// AckPacket is a packet that is sent by the controller to acknowledge a packet.
+type AckPacket struct {
+	IncomingPacketType IncomingPacketType
+}
+
 func (p ErrorPacket) Type() OutgoingPacketType { return TypeErrorPacket }
 func (p PanicPacket) Type() OutgoingPacketType { return TypePanicPacket }
 func (p LogPacket) Type() OutgoingPacketType   { return TypeLogPacket }
+func (p AckPacket) Type() OutgoingPacketType   { return TypeAckPacket }
 
 // Reader is a reader that reads packets.
 type Reader interface {
@@ -112,8 +126,10 @@ type Reader interface {
 // ReadContext is the state of the LED strip. Data in this structure are
 // required for the device to read incoming packets.
 type ReadContext struct {
-	// NumLEDs is the number of LEDs in the strip.
-	NumLEDs uint16
+	// LEDBuffer is the buffer that contains the current state of the LED strip.
+	// This buffer will be used for reading SetPacket.
+	// Its length must be NumLEDs * 3.
+	LEDBuffer []uint8
 }
 
 // ReadIncomingPacket reads an incoming packet from the given reader.
@@ -140,24 +156,24 @@ func ReadIncomingPacket(r io.Reader, context ReadContext) (IncomingPacket, error
 		packet = p
 
 	case TypeSetPacket:
-		var p SetPacket
-		p.Pix = make([]uint8, 3*context.NumLEDs)
-		if _, err := io.ReadFull(r, p.Pix); err != nil {
+		if _, err := io.ReadFull(r, context.LEDBuffer); err != nil {
 			return nil, fmt.Errorf("failed to read pixel data: %w", err)
 		}
-		packet = p
+		packet = SetPacket{Pix: context.LEDBuffer}
 
 	default:
 		return nil, fmt.Errorf("unknown packet type: %s", ptype)
 	}
 
-	var checksum uint8
+	gotChecksum := hash.Sum32()
+
+	var checksum uint32
 	if err := binary.Read(r, Endianness, &checksum); err != nil {
 		return nil, fmt.Errorf("failed to read checksum: %w", err)
 	}
 
-	if checksum != uint8(hash.Sum32()) {
-		return nil, fmt.Errorf("checksum mismatch")
+	if checksum != gotChecksum {
+		return nil, fmt.Errorf("checksum mismatch (packet: %#v)", packet)
 	}
 
 	return packet, nil
@@ -165,37 +181,45 @@ func ReadIncomingPacket(r io.Reader, context ReadContext) (IncomingPacket, error
 
 // WriteIncomingPacket writes an incoming packet to the given writer.
 func WriteIncomingPacket(w io.Writer, p IncomingPacket) error {
+	checksum, err := writeIncomingPacket(w, p)
+	if err != nil {
+		return err
+	}
+	if err := binary.Write(w, Endianness, checksum); err != nil {
+		return fmt.Errorf("failed to write packet checksum: %w", err)
+	}
+	return nil
+}
+
+// write the packet and return the checksum
+func writeIncomingPacket(w io.Writer, p IncomingPacket) (uint32, error) {
 	hash := crc32.NewIEEE()
 	w = io.MultiWriter(w, hash)
 
 	switch p := p.(type) {
 	case InitializePacket:
 		if err := binary.Write(w, Endianness, TypeInitializePacket); err != nil {
-			return fmt.Errorf("failed to write packet type: %w", err)
+			return 0, fmt.Errorf("failed to write packet type: %w", err)
 		}
 		if err := binary.Write(w, Endianness, p); err != nil {
-			return fmt.Errorf("failed to write packet: %w", err)
+			return 0, fmt.Errorf("failed to write packet: %w", err)
 		}
 	case ClearPacket:
 		if err := binary.Write(w, Endianness, TypeClearPacket); err != nil {
-			return fmt.Errorf("failed to write packet type: %w", err)
+			return 0, fmt.Errorf("failed to write packet type: %w", err)
 		}
 	case SetPacket:
 		if err := binary.Write(w, Endianness, TypeSetPacket); err != nil {
-			return fmt.Errorf("failed to write packet type: %w", err)
+			return 0, fmt.Errorf("failed to write packet type: %w", err)
 		}
 		if _, err := w.Write(p.Pix); err != nil {
-			return fmt.Errorf("failed to write packet: %w", err)
+			return 0, fmt.Errorf("failed to write packet: %w", err)
 		}
 	default:
-		return fmt.Errorf("unknown packet type: %T", p)
+		return 0, fmt.Errorf("unknown packet type: %T", p)
 	}
 
-	if err := binary.Write(w, Endianness, hash.Sum32()); err != nil {
-		return fmt.Errorf("failed to write packet checksum: %w", err)
-	}
-
-	return nil
+	return hash.Sum32(), nil
 }
 
 // ReadOutgoingPacket reads an outgoing packet from the given reader.
@@ -211,7 +235,6 @@ func ReadOutgoingPacket(r io.Reader, context ReadContext) (OutgoingPacket, error
 
 	switch ptype := OutgoingPacketType(ptypeBuf[0]); ptype {
 	case TypeErrorPacket:
-		var p ErrorPacket
 		var length uint16
 		if err := binary.Read(r, Endianness, &length); err != nil {
 			return nil, fmt.Errorf("failed to read error message length: %w", err)
@@ -220,15 +243,9 @@ func ReadOutgoingPacket(r io.Reader, context ReadContext) (OutgoingPacket, error
 		if _, err := io.ReadFull(r, buf); err != nil {
 			return nil, fmt.Errorf("failed to read error message: %w", err)
 		}
-		p.Message = string(buf)
-		packet = p
-
-	case TypePanicPacket:
-		var p PanicPacket
-		packet = p
+		packet = ErrorPacket{Message: string(buf)}
 
 	case TypeLogPacket:
-		var p LogPacket
 		var length uint16
 		if err := binary.Read(r, Endianness, &length); err != nil {
 			return nil, fmt.Errorf("failed to read log message length: %w", err)
@@ -237,20 +254,44 @@ func ReadOutgoingPacket(r io.Reader, context ReadContext) (OutgoingPacket, error
 		if _, err := io.ReadFull(r, buf); err != nil {
 			return nil, fmt.Errorf("failed to read log message: %w", err)
 		}
-		p.Message = string(buf)
-		packet = p
+		packet = LogPacket{Message: string(buf)}
+
+	case TypeAckPacket:
+		var incomingPacketType IncomingPacketType
+		if err := binary.Read(r, Endianness, &incomingPacketType); err != nil {
+			return nil, fmt.Errorf("failed to read ack's incoming packet type: %w", err)
+		}
+
+		packet = AckPacket{IncomingPacketType: incomingPacketType}
+
+	case TypePanicPacket:
+		rbuf := bufio.NewReader(r)
+
+		// Try to read the rest of the input until \bufr\n. Use a bufio here
+		// because the reader is definitely broken after this.
+		s, err := rbuf.ReadString('\n')
+		if err != nil {
+			packet = PanicPacket{}
+		} else {
+			packet = PanicPacket{Message: "p" + strings.TrimSpace(s)}
+		}
+
+		// Skip the checksum.
+		return packet, nil
 
 	default:
-		return nil, fmt.Errorf("unknown packet type: %s", ptype)
+		return nil, fmt.Errorf("unknown packet type: %s (%q)", ptype, ptypeBuf[:])
 	}
+
+	gotChecksum := hash.Sum32()
 
 	var checksum uint32
 	if err := binary.Read(r, Endianness, &checksum); err != nil {
 		return nil, fmt.Errorf("failed to read packet checksum: %w", err)
 	}
 
-	if checksum != hash.Sum32() {
-		return nil, fmt.Errorf("packet checksum mismatch")
+	if checksum != gotChecksum {
+		return nil, fmt.Errorf("packet checksum mismatch (packet: %#v)", packet)
 	}
 
 	return packet, nil
@@ -273,9 +314,11 @@ func WriteOutgoingPacket(w io.Writer, p OutgoingPacket) error {
 			return fmt.Errorf("failed to write error message: %w", err)
 		}
 	case PanicPacket:
-		if err := binary.Write(w, Endianness, TypePanicPacket); err != nil {
-			return fmt.Errorf("failed to write packet type: %w", err)
+		message := "panic: " + p.Message + "\r\n"
+		if _, err := w.Write([]byte(message)); err != nil {
+			return fmt.Errorf("failed to write panic message: %w", err)
 		}
+		return nil // Don't write the checksum.
 	case LogPacket:
 		if err := binary.Write(w, Endianness, TypeLogPacket); err != nil {
 			return fmt.Errorf("failed to write packet type: %w", err)
@@ -285,6 +328,13 @@ func WriteOutgoingPacket(w io.Writer, p OutgoingPacket) error {
 		}
 		if _, err := w.Write([]byte(p.Message)); err != nil {
 			return fmt.Errorf("failed to write log message: %w", err)
+		}
+	case AckPacket:
+		if err := binary.Write(w, Endianness, TypeAckPacket); err != nil {
+			return fmt.Errorf("failed to write packet type: %w", err)
+		}
+		if err := binary.Write(w, Endianness, p.IncomingPacketType); err != nil {
+			return fmt.Errorf("failed to write ack's incoming packet type: %w", err)
 		}
 	default:
 		return fmt.Errorf("unknown packet type: %T", p)

@@ -4,7 +4,6 @@ import (
 	"io"
 	"machine"
 	"runtime"
-	"time"
 )
 
 type serialIO struct {
@@ -35,21 +34,18 @@ func WrapSerial(serial machine.Serialer) SerialReadWriter {
 }
 
 func (s serialIO) Read(b []byte) (int, error) {
-	n := s.Buffered()
-	if n > 0 {
-		for i := 0; i < n; i++ {
-			c, err := s.ReadByte()
-			if err != nil {
-				return i, err
-			}
-			b[i] = c
+	var n int
+	for n < s.Buffered() && n < len(b) {
+		c, err := s.ReadByte()
+		if err != nil {
+			return n, err
 		}
-		// Emulate blocking-like behavior by yielding the scheduler.
-		runtime.Gosched()
-	} else {
-		// Sleep to reduce CPU usage.
-		time.Sleep(1 * time.Millisecond)
+		b[n] = c
+		n++
 	}
+
+	// Emulate blocking-like behavior by yielding the scheduler.
+	runtime.Gosched()
 	return n, nil
 }
 

@@ -1,6 +1,6 @@
-device = "/dev/ttyUSB0"
+device = "/dev/ttyACM0"
 baud = 115200
-rate = 15 # draws per second
+rate = 5 # draws per second
 
 [[led]]
   range = [40, 192]

@@ -2,6 +2,7 @@ package catglow
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -89,13 +90,6 @@ func (d *internalDaemon) Run(ctx context.Context) error {
 	defer port.Close()
 
 	d.port = port
-	if !d.writePacket(ctx, ledserial.InitializePacket{
-		NumLEDs: uint16(d.cfg.NumLEDs()),
-	}) {
-		return errors.New("failed to initialize LEDs")
-	}
-
-	outPackets := make(chan ledserial.OutgoingPacket)
 
 	errg, ctx := errgroup.WithContext(ctx)
 	errg.Go(func() error {
@@ -106,28 +100,29 @@ func (d *internalDaemon) Run(ctx context.Context) error {
 		}
 		return ctx.Err()
 	})
+
+	outPackets := make(chan ledserial.OutgoingPacket)
 	errg.Go(func() error {
-		return d.mainLoop(ctx)
+		return d.mainLoop(ctx, outPackets)
 	})
 	errg.Go(func() error {
 		return d.readPackets(ctx, outPackets)
 	})
-	errg.Go(func() error {
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case p := <-outPackets:
-				if err := d.handlePacket(p); err != nil {
-					return err
-				}
-			}
-		}
-	})
+
 	return errg.Wait()
 }
 
-func (d *internalDaemon) mainLoop(ctx context.Context) error {
+func (d *internalDaemon) mainLoop(ctx context.Context, packets <-chan ledserial.OutgoingPacket) error {
+	d.logger.Debug("waiting 100ms for the read loop to start...")
+	time.Sleep(100 * time.Millisecond)
+
+	d.logger.Debug("sending initialize packet")
+	if !d.writePacket(ctx, ledserial.InitializePacket{
+		NumLEDs: uint16(d.cfg.NumLEDs()),
+	}) {
+		return errors.New("failed to initialize LEDs")
+	}
+
 	leds := led.NewLEDs(d.cfg.NumLEDs())
 	var animators []trackedAnimator
 
@@ -146,7 +141,8 @@ func (d *internalDaemon) mainLoop(ctx context.Context) error {
 	frameTicker := time.NewTicker(time.Second / time.Duration(d.cfg.Rate))
 	defer frameTicker.Stop()
 
-	// var nextFrame <-chan time.Time // nil unless invalidated
+	var nextFrame <-chan time.Time // nil unless invalidated
+
 	// refresh := d.refresh           // nil when refresh is not done
 	// d.QueueRefresh()
 
@@ -160,7 +156,38 @@ eventLoop:
 		// 	nextFrame = frameTicker.C
 		// 	refresh = nil
 
-		case <-frameTicker.C:
+		case p := <-packets:
+			d.logger.Debug("handling packet", "type", p.Type())
+
+			switch p := p.(type) {
+			case ledserial.AckPacket:
+				d.logger.Debug(
+					"received ack packet from controller",
+					"acked_for", p.IncomingPacketType)
+				nextFrame = frameTicker.C
+
+			case ledserial.ErrorPacket:
+				d.logger.Warn(
+					"received error packet from controller",
+					"message", p.Message)
+				return errors.New("controller reported error")
+
+			case ledserial.PanicPacket:
+				d.logger.Error(
+					"controller unrecoverably panicked",
+					"message", p.Message)
+				return errors.New("controller panicked")
+
+			case ledserial.LogPacket:
+				d.logger.Info(
+					"received log packet from controller",
+					"message", p.Message)
+
+			default:
+				return fmt.Errorf("received unknown packet from controller: %s", p.Type())
+			}
+
+		case <-nextFrame:
 			// nextFrame = nil
 			// refresh = d.refresh
 
@@ -173,6 +200,9 @@ eventLoop:
 			d.writePacket(ctx, ledserial.SetPacket{
 				Pix: leds.AsPixels(),
 			})
+
+			// Reset the frame scheduler and wait until we get an ack.
+			nextFrame = nil
 		}
 	}
 
@@ -185,9 +215,7 @@ func (d *internalDaemon) readPackets(ctx context.Context, dst chan<- ledserial.O
 	}
 
 	for ctx.Err() == nil {
-		p, err := ledserial.ReadOutgoingPacket(d.port, ledserial.ReadContext{
-			Numled.LEDs: uint16(d.cfg.NumLEDs()),
-		})
+		p, err := ledserial.ReadOutgoingPacket(d.port, ledserial.ReadContext{})
 		if err != nil {
 			// A short read indicates a timeout. This is expected.
 			// Ignore the error and try again.
@@ -212,26 +240,6 @@ func (d *internalDaemon) readPackets(ctx context.Context, dst chan<- ledserial.O
 	return ctx.Err()
 }
 
-func (d *internalDaemon) handlePacket(p ledserial.OutgoingPacket) error {
-	switch p := p.(type) {
-	case ledserial.ErrorPacket:
-		d.logger.Warn(
-			"received error packet from controller",
-			"message", p.Message)
-		return nil
-
-	case ledserial.PanicPacket:
-		d.logger.Error("controller unrecoverably panicked")
-		return errors.New("controller panicked")
-
-	default:
-		d.logger.Warn(
-			"received unknown packet from controller",
-			"packet", p.Type())
-		return nil
-	}
-}
-
 func (d *internalDaemon) writePacket(ctx context.Context, p ledserial.IncomingPacket) bool {
 	d.logger.Debug(
 		"writing packet",
@@ -241,13 +249,6 @@ func (d *internalDaemon) writePacket(ctx context.Context, p ledserial.IncomingPa
 		d.logger.Warn(
 			"failed to write packet",
 			"packet", p.Type(),
-			"error", err)
-		return false
-	}
-
-	if err := d.port.Drain(); err != nil {
-		d.logger.Warn(
-			"failed to drain serial port",
 			"error", err)
 		return false
 	}

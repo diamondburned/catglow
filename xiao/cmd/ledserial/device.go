@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"machine"
-	"time"
 
 	"libdb.so/catglow/ledserial"
 	"tinygo.org/x/drivers/ws2812"
@@ -14,7 +13,7 @@ type Device struct {
 	serial SerialReadWriter
 	led    ws2812.Device
 
-	numLEDs uint16
+	ledBuffer []byte
 }
 
 // NewDevice creates a new device.
@@ -28,12 +27,6 @@ func NewDevice(serial machine.Serialer, ledPin machine.Pin) *Device {
 
 // Run runs the device loop forever.
 func (d *Device) Run() {
-	go func() {
-		for t := range time.Tick(5 * time.Second) {
-			d.log(fmt.Sprintf("the time is now %s", t))
-		}
-	}()
-
 	for {
 		p, err := d.readPacket()
 		if err != nil {
@@ -41,16 +34,12 @@ func (d *Device) Run() {
 			continue
 		}
 
+		d.log(fmt.Sprintf("received packet: %s", p.Type()))
+
 		if err := d.handlePacket(p); err != nil {
 			d.logError(err)
 		}
 	}
-}
-
-func (d *Device) panic(err error) {
-	d.logError(err)
-	d.sendPacket(ledserial.PanicPacket{})
-	panic("device panic")
 }
 
 func (d *Device) log(msg string) {
@@ -66,9 +55,14 @@ func (d *Device) sendPacket(p ledserial.OutgoingPacket) {
 }
 
 func (d *Device) readPacket() (ledserial.IncomingPacket, error) {
-	return ledserial.ReadIncomingPacket(d.serial, ledserial.ReadContext{
-		NumLEDs: d.numLEDs,
+	turnOnMainLED(255, 255, 255)
+
+	p, err := ledserial.ReadIncomingPacket(d.serial, ledserial.ReadContext{
+		LEDBuffer: d.ledBuffer,
 	})
+
+	turnOffMainLED()
+	return p, err
 }
 
 func (d *Device) handlePacket(p ledserial.IncomingPacket) error {
@@ -77,32 +71,49 @@ func (d *Device) handlePacket(p ledserial.IncomingPacket) error {
 		if p.NumLEDs < 1 {
 			return fmt.Errorf("invalid number of LEDs: %d", p.NumLEDs)
 		}
-		d.numLEDs = p.NumLEDs
-		d.clearLEDs()
-		return nil
+		d.ledBuffer = make([]byte, 3*int(p.NumLEDs))
+		d.clearLEDs(true)
 
 	case ledserial.ClearPacket:
-		d.clearLEDs()
-		return nil
+		d.clearLEDs(false)
 
 	case ledserial.SetPacket:
-		if len(p.Pix) != 3*int(d.numLEDs) {
-			return fmt.Errorf("invalid number of pixels: %d", len(p.Pix)/3)
-		}
 		for _, b := range p.Pix {
 			d.led.WriteByte(b)
 		}
-		return nil
 
 	default:
 		return fmt.Errorf("unknown packet type: %T", p)
 	}
+
+	d.sendPacket(ledserial.AckPacket{
+		IncomingPacketType: p.Type(),
+	})
+	return nil
 }
 
-func (d *Device) clearLEDs() {
-	for i := 0; i < int(d.numLEDs); i++ {
-		d.serial.WriteByte(0)
-		d.serial.WriteByte(0)
-		d.serial.WriteByte(0)
+func (d *Device) clearLEDs(signalReady bool) {
+	var i int
+
+	if signalReady {
+		writeLEDRGB(d.led, 255, 0, 0) // red
+		i++
 	}
+
+	for i < len(d.ledBuffer)-1 {
+		writeLEDRGB(d.led, 0, 0, 0)
+		i++
+	}
+
+	if signalReady {
+		writeLEDRGB(d.led, 0, 0, 255) // blue
+	} else {
+		writeLEDRGB(d.led, 0, 0, 0)
+	}
+}
+
+func writeLEDRGB(led ws2812.Device, r, g, b uint8) {
+	led.WriteByte(r)
+	led.WriteByte(g)
+	led.WriteByte(b)
 }
