@@ -98,8 +98,10 @@ pkgs.mkShell {
 		gopls
 		gotools
 		go-tools # staticcheck
+		goimports
+		staticcheck
 		esptool
 	] ++ [ tinygo ];
 
-	# CGO_ENABLED = "1";
+	CGO_ENABLED = "1";
 }
